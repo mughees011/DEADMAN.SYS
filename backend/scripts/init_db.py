@@ -62,6 +62,7 @@ if not session.query(Agent).first():
         paused=False,
         born_at=datetime.utcnow(),
         last_income_at=datetime.utcnow(),
+        last_evaluated_at=datetime.utcnow(),
     )
     session.add(agent)
     print(f"[OK] Agent_01 (Gen 0) created with balance $0.00")

@@ -72,8 +72,9 @@ def apply_income_result(
 
     agent.balance = new_balance
 
-    # ── 6. Death check B: 7-day dead-man (wall-clock, not cycle count) ────────
-    days_since_income = datetime.utcnow() - agent.last_income_at
+    # ── 6. Death check B: 7-day dead-man (outage tolerant) ────────────────────
+    evaluated_at = agent.last_evaluated_at or datetime.utcnow()
+    days_since_income = evaluated_at - agent.last_income_at
     if days_since_income >= timedelta(days=DEAD_MAN_DAYS):
         _kill_agent(
             session,
@@ -93,7 +94,8 @@ def check_deadman_only(session: Session, agent: Agent) -> bool:
     or an error occurred — no balance change, but death can still trigger).
     Returns True if agent was killed.
     """
-    days_since_income = datetime.utcnow() - agent.last_income_at
+    evaluated_at = agent.last_evaluated_at or datetime.utcnow()
+    days_since_income = evaluated_at - agent.last_income_at
     if days_since_income >= timedelta(days=DEAD_MAN_DAYS):
         _kill_agent(
             session,
@@ -162,6 +164,7 @@ def _try_spawn(session: Session, parent: Agent) -> None:
         paused=False,
         born_at=datetime.utcnow(),
         last_income_at=datetime.utcnow(),
+        last_evaluated_at=datetime.utcnow(),
     )
     session.add(child)
 

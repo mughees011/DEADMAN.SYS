@@ -205,6 +205,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         log_row.chosen_channel = None
         log_row.plan_text = f"WAIT — {reason}"
         log_row.legality_justification = "(wait — no action)"
+        agent.last_evaluated_at = datetime.utcnow()
         check_deadman_only(session, agent)
         session.commit()
         return
@@ -229,6 +230,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
             )
             log.warning("Agent %s: %s", agent.name, err_msg)
             log_row.error = err_msg
+            agent.last_evaluated_at = datetime.utcnow()
             check_deadman_only(session, agent)
             session.commit()
             return
@@ -250,6 +252,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
             return
 
         # ── Apply survival rules (tax, death, spawn) ──────────────────────────
+        agent.last_evaluated_at = datetime.utcnow()
         apply_income_result(session, agent, log_row, net_result)
         session.commit()
         return
@@ -259,6 +262,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
     log_row.error = f"Unknown tool: {tool_name}"
     log_row.plan_text = "(unknown tool)"
     log_row.legality_justification = "(N/A)"
+    agent.last_evaluated_at = datetime.utcnow()
     check_deadman_only(session, agent)
     session.commit()
 
