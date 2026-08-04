@@ -1,0 +1,9 @@
+anthropic
+alpaca-py
+sqlalchemy
+apscheduler
+python-dotenv
+fastapi
+uvicorn
+pydantic
+alembic

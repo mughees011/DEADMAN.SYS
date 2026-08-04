@@ -1,0 +1,73 @@
+# ============================================================
+# SECRETS — never commit real credentials
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ============================================================
+# PROJECT-SPECIFIC — real financial/agent data, never public
+# ============================================================
+backend/survival.db
+*.db
+*.sqlite
+*.sqlite3
+backend/agent_data/
+backend/agent_data/KILL_SWITCH
+
+# ============================================================
+# PYTHON
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+backend/venv/
+backend/.venv/
+
+# Alembic — keep migrations, ignore local cache only
+backend/alembic/__pycache__/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ============================================================
+# NODE / REACT / VITE (dashboard)
+# ============================================================
+dashboard/node_modules/
+node_modules/
+dashboard/dist/
+dashboard/build/
+dashboard/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ============================================================
+# EDITOR / OS
+# ============================================================
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# LOGS
+# ============================================================
+*.log
+logs/
