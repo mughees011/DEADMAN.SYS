@@ -1,4 +1,4 @@
-anthropic
+litellm
 alpaca-py
 sqlalchemy
 apscheduler
@@ -7,3 +7,4 @@ fastapi
 uvicorn
 pydantic
 alembic
+werkzeug

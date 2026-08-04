@@ -85,7 +85,7 @@ class BossNote(Base):
 class SystemState(Base):
     __tablename__ = 'system_state'
 
-    id = Column(Integer, primary_key=True, default=1)
+    id = Column(Integer, primary_key=True)  # single-row sentinel
     kill_switch = Column(Boolean, nullable=False, default=False)
     kill_switch_set_at = Column(DateTime, nullable=True)
     updated_by = Column(String, nullable=False, default="boss")

@@ -11,7 +11,7 @@ Everything an implementer (human or AI) needs so no tool, library, or API is gue
 ## 2. Core dependencies (Python)
 | Package | Purpose | Notes |
 |---|---|---|
-| `anthropic` | Agent decision-making via Claude, tool-use | Model: `claude-sonnet-4-6` |
+| `litellm` | Provider-agnostic LLM interface — wraps OpenAI, Anthropic, Gemini, Groq, etc. | Default model: `claude-sonnet-4-6`. Configured via `LLM_MODEL` + provider API key in `.env`. Do not hardcode a provider. |
 | `alpaca-py` | Real stock/ETF trading | Official Alpaca SDK |
 | `sqlalchemy` | ORM for the backend schema | See Backend Schema doc |
 | `psycopg2-binary` | Postgres driver | Or `sqlite3` (stdlib) for single-VPS v1 |
@@ -29,11 +29,13 @@ Everything an implementer (human or AI) needs so no tool, library, or API is gue
 | `lucide-react` | Icons |
 
 ## 4. External APIs / accounts required
-- **Anthropic API** — `ANTHROPIC_API_KEY`. Used for every agent decision cycle
-  (tool-use call as already prototyped in `agent_core.py`).
+- **LLM provider** — configured via `LLM_MODEL` in `.env` (e.g. `claude-sonnet-4-6`,
+  `gpt-4o`, `gemini/gemini-2.5-pro`). The matching provider API key must also be set
+  (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). `litellm` handles routing; the agent
+  core never imports a provider SDK directly. Default ships as `claude-sonnet-4-6`.
 - **Alpaca** (or equivalent broker with a REST/SDK API) — `APCA_API_KEY_ID`,
-  `APCA_API_SECRET_KEY`. Start in **paper trading mode** (`paper=True`) until the Boss
-  explicitly flips it to live. This flag lives in `.env`, never in code.
+  `APCA_API_SECRET_KEY`. Start in **paper trading mode** (`APCA_PAPER=true`) until the
+  Boss explicitly flips it to live. This flag lives in `.env`, never in code.
 - (Future channel) whatever payment/content platform is chosen when a second channel
   is added — deferred until that channel is actually scoped.
 
@@ -108,3 +110,44 @@ Everything an implementer (human or AI) needs so no tool, library, or API is gue
 - No Docker requirement (optional convenience only).
 - No additional income channels beyond trading until v1 trading is proven end-to-end
   on paper, then live, with real observed behavior.
+
+## 12. Error handling & outage policy
+This section is non-negotiable — it governs what happens when infrastructure (LLM API
+or broker API) fails mid-cycle, to prevent ambiguous money state.
+
+**When the LLM call fails (timeout, rate-limit, API error):**
+- Write one row to `agent_logs` with `error` set to the exception string.
+- Do NOT touch `agents.balance`.
+- Do NOT update `agents.last_income_at`.
+- Abort the rest of that agent's cycle for that tick. The agent is treated as having
+  taken no action (equivalent to an implicit "wait").
+
+**When the broker/channel call fails after the LLM has already chosen an action:**
+- Same rules: log the error, do not touch balance, do not update `last_income_at`.
+- The legality justification and plan text are still written to the log row so the
+  audit trail shows what the agent *intended* even if execution failed.
+
+**Outages and the 7-day dead-man timer:**
+- The 7-day timer is computed from real wall-clock elapsed time:
+  `datetime.utcnow() - agent.last_income_at >= timedelta(days=7)`.
+- It is NOT a cycle count. Switching from hourly to daily scheduling does not
+  change what "7 days" means.
+- API outages do **not** pause or extend the timer. A run of outages that prevents
+  income for 7 real days still triggers death. This is an explicit design choice:
+  the timer measures real survival, not supervised uptime. If the Boss wants to
+  protect an agent during known outages, they should use the per-agent `paused` flag
+  (noting that pausing also does not extend the timer — see App Flow §3).
+
+**Death audit trail:**
+- When an agent dies, `agents.balance` is floored to `0` in the database (per schema
+  integrity rules in Backend Schema §4).
+- However, the true negative net result (e.g. `-$42.00`) MUST be written to the
+  final `agent_logs.net_result` row before the death transaction completes, so the
+  audit trail accurately reflects what actually happened, not just what the floor rule
+  produces. `agent_logs.net_result` may go negative; `agents.balance` may not.
+
+**Spawn constants (v1):**
+- Spawn threshold: **$500.00** — agent must hold at least this in spendable balance.
+- Spawn seed cost: **$100.00** — debited atomically from parent, credited to child.
+- These are `.env`-configurable (`SPAWN_THRESHOLD`, `SPAWN_SEED`) but the defaults
+  above are the shipped values.
