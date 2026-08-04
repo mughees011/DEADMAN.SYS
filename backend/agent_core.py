@@ -172,7 +172,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
             model=LLM_MODEL,
             messages=messages,
             tools=ALL_TOOLS,
-            tool_choice="required",  # force exactly one tool call
+            tool_choice="auto",  # 'required' not supported by all providers; system prompt enforces one tool call
         )
     except Exception as llm_err:
         # TRD §12: LLM failure → log error, do not touch balance or last_income_at
@@ -185,7 +185,20 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         return
 
     # ── Parse tool call ───────────────────────────────────────────────────────
-    tool_call = response.choices[0].message.tool_calls[0]
+    message = response.choices[0].message
+    if not message.tool_calls:
+        # Model replied in plain text instead of calling a tool — treat as wait
+        plain_text = message.content or ""
+        log.warning("Agent %s returned no tool call (plain text): %s", agent.name, plain_text[:200])
+        log_row.plan_text = f"(no tool call) {plain_text[:500]}"
+        log_row.legality_justification = "(no tool call — treated as wait)"
+        log_row.error = "Model returned plain text instead of a tool call."
+        agent.last_evaluated_at = datetime.utcnow()
+        check_deadman_only(session, agent)
+        session.commit()
+        return
+
+    tool_call = message.tool_calls[0]
     tool_name = tool_call.function.name
     try:
         args = json.loads(tool_call.function.arguments)
@@ -238,7 +251,12 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         # ── Execute channel ───────────────────────────────────────────────────
         try:
             channel = TradingChannel()
-            net_result = channel.execute(symbol=symbol, qty=qty, side=side)
+            net_result = channel.execute(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                agent_balance=agent.balance
+            )
             log.info(
                 "Agent %s traded %s %s x%d → net $%s",
                 agent.name, side, symbol, qty, net_result,

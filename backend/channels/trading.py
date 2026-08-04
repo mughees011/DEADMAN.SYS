@@ -99,7 +99,7 @@ class TradingChannel:
         self.data_client = StockHistoricalDataClient(api_key, secret_key)
         self.paper = paper
 
-    def execute(self, symbol: str, qty: int, side: str) -> Decimal:
+    def execute(self, symbol: str, qty: int, side: str, agent_balance=None) -> Decimal:
         """
         Place a market order and return the net P&L as a Decimal.
 
@@ -117,6 +117,20 @@ class TradingChannel:
         if qty < 1:
             raise ValueError(f"qty must be >= 1, got {qty}")
 
+        # Fetch latest price first to perform affordability check
+        req = StockLatestTradeRequest(symbol_or_symbols=symbol)
+        latest = self.data_client.get_stock_latest_trade(req)
+        price = Decimal(str(latest[symbol].price))
+        gross = price * qty
+
+        if side == "buy" and agent_balance is not None:
+            if gross > agent_balance:
+                raise ValueError(
+                    f"Affordability rejected: buying {qty}x {symbol} at ${price:.2f} "
+                    f"costs ${gross:.2f} but agent balance is only ${agent_balance:.2f}. "
+                    f"Either reduce qty or choose a cheaper asset."
+                )
+
         order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
         # Submit the order
@@ -128,12 +142,6 @@ class TradingChannel:
         )
         self.trading_client.submit_order(order_request)
 
-        # Fetch latest price for P&L approximation
-        req = StockLatestTradeRequest(symbol_or_symbols=symbol)
-        latest = self.data_client.get_stock_latest_trade(req)
-        price = Decimal(str(latest[symbol].price))
-
-        gross = price * qty
         if side == "buy":
             return -gross   # capital deployed; realised P&L comes on the sell
         else:

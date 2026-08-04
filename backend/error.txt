@@ -1,0 +1,2 @@
+2026-08-05 00:55:59,081 [INFO] __main__: DEADMAN.SYS scheduler starting. Cycle interval: 60 minute(s).
+2026-08-05 00:55:59,113 [INFO] __main__: Scheduler running. First cycle in 60 minute(s). Press Ctrl+C to stop.

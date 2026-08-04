@@ -21,7 +21,7 @@ from datetime import datetime
 
 load_dotenv()
 
-SEED_AMOUNT = Decimal("200.00")
+SEED_AMOUNT = Decimal("5000.00")
 
 db_url = os.environ.get(
     "DATABASE_URL",
