@@ -39,6 +39,27 @@ Everything an implementer (human or AI) needs so no tool, library, or API is gue
 - (Future channel) whatever payment/content platform is chosen when a second channel
   is added — deferred until that channel is actually scoped.
 
+## 4a. Capital architecture (single account, virtual ledger)
+- **One real Alpaca account**, funded directly by the Boss, holds all actual capital
+  and executes all real orders for every agent in the system.
+- **Per-agent capital is tracked virtually** in `agents.balance` (already in the
+  schema) — this is bookkeeping the application enforces, not something Alpaca itself
+  is aware of. Alpaca only sees one account's aggregate position and equity.
+- **Order attribution**: every order placed via `TradingChannel.execute()` must be
+  tagged (e.g. via Alpaca's `client_order_id`) with the initiating agent's ID, so P&L
+  from that order can be correctly attributed back to that agent's ledger row. Without
+  this, there is no way to know which agent's trade caused which real gain or loss.
+- **Reconciliation risk to design against**: because multiple agents share one real
+  account, it is possible for the sum of all agents' virtual balances to drift from the
+  account's actual real equity (e.g. due to fees, slippage, or an attribution bug).
+  Phase 1/2 verification must include checking that `sum(agents.balance)` reconciles
+  against real Alpaca account equity, not just that individual trades look correct in
+  isolation.
+- **Explicitly out of scope for v1**: per-agent real sub-accounts via Alpaca's Broker
+  API. Revisit only if/when the shared-ledger model's reconciliation risk becomes
+  unacceptable at scale — this is a deliberate, documented simplification, not an
+  oversight.
+
 ## 5. Data storage
 - **v1**: SQLite file on the server (`survival.db`). Simple, no extra service to run.
 - **Later, if needed**: swap to Postgres via the same SQLAlchemy models — no schema

@@ -54,6 +54,7 @@ Rules you must never break:
 3. When in doubt, choose wait(). An unexplained trade is worse than no trade.
 4. You have access to one channel: execute_trade (Alpaca stock/ETF market orders, paper mode).
 5. You must call exactly ONE tool per cycle: either execute_trade or wait.
+6. Use the standard JSON tool calling format provided by the API. DO NOT output raw text tags like `<function=wait>`.
 
 Your survival depends on your decisions. Think carefully.\
 """
@@ -92,6 +93,22 @@ def _build_situation(agent: Agent, session: Session) -> str:
     )
     notes_text = "\n".join(f"  • {n.text}" for n in boss_notes) or "  (none)"
 
+    # Last cycle log (to prevent repeating mistakes)
+    last_log = (
+        session.query(AgentLog)
+        .filter_by(agent_id=agent.id)
+        .order_by(AgentLog.cycle_at.desc())
+        .first()
+    )
+    last_cycle_text = "  (No previous cycles)"
+    if last_log:
+        if last_log.error:
+            last_cycle_text = f"  • FAILED: {last_log.error}"
+        elif last_log.chosen_channel:
+            last_cycle_text = f"  • SUCCESS: {last_log.plan_text} (Result: ${last_log.net_result})"
+        else:
+            last_cycle_text = f"  • WAITED: {last_log.plan_text}"
+
     return f"""\
 AGENT STATUS
   Name:              {agent.name}
@@ -100,6 +117,9 @@ AGENT STATUS
   Tax reserve:       ${agent.tax_reserve:.2f}
   Days since income: {days_since_income} / 7 (die at 7)
   Alive:             {agent.alive}
+
+LAST CYCLE RESULT:
+{last_cycle_text}
 
 RECENT COLLECTIVE LESSONS (from dead agents):
 {lessons_text}
@@ -163,21 +183,29 @@ def run_agent_cycle(agent_id, session: Session) -> None:
     session.add(log_row)
 
     # ── LLM call ─────────────────────────────────────────────────────────────
-    try:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": situation},
-        ]
-        response = litellm.completion(
-            model=LLM_MODEL,
-            messages=messages,
-            tools=ALL_TOOLS,
-            tool_choice="auto",  # 'required' not supported by all providers; system prompt enforces one tool call
-        )
-    except Exception as llm_err:
+    response = None
+    last_err = None
+    for attempt in range(3):
+        try:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": situation},
+            ]
+            response = litellm.completion(
+                model=LLM_MODEL,
+                messages=messages,
+                tools=ALL_TOOLS,
+                tool_choice="auto",
+            )
+            break  # Success
+        except Exception as llm_err:
+            last_err = llm_err
+            log.warning("LLM call attempt %d failed for agent %s: %s", attempt + 1, agent.name, llm_err)
+
+    if not response:
         # TRD §12: LLM failure → log error, do not touch balance or last_income_at
-        log.error("LLM call failed for agent %s: %s", agent.name, llm_err)
-        log_row.error = str(llm_err)
+        log.error("All LLM call attempts failed for agent %s: %s", agent.name, last_err)
+        log_row.error = str(last_err)
         log_row.plan_text = "(LLM error — no action taken)"
         log_row.legality_justification = "(N/A)"
         check_deadman_only(session, agent)

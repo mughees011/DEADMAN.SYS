@@ -29,6 +29,32 @@ product in v1.
 - A percentage of every agent's net income is set aside as a tax reserve the Boss uses
   to actually file/pay taxes (the agent is not a legal or tax entity).
 
+### 3.1 Capital model
+**Decision: Option A — Boss-fronted seed capital, agent balance = net P&L ledger.**
+
+An agent cannot place a real trade with $0 — brokerage accounts require actual capital
+to exist before any order executes. So "the agent starts at $0 and earns its first
+dollar itself" means:
+
+- The Boss deposits real seed capital into **one real Alpaca account** that the Boss
+  owns and controls.
+- Each agent's `balance` field is a **virtual ledger** tracking that agent's net
+  profit/loss against its allocated slice of that capital — not capital the agent
+  itself possesses or can withdraw.
+- An agent's "first dollar" is its first net-positive trade result, not its first unit
+  of capital — the capital itself always belongs to, and is provided by, the Boss.
+- Death (`balance <= 0`) means the agent has lost back everything it was allocated —
+  its slice of the real account is effectively spent. The underlying real account isn't
+  necessarily at $0; only that agent's tracked ledger is.
+- Spawning transfers real capital, at the account level, from parent's allocation to a
+  new ledger entry for the child — no new brokerage account is created (see TRD §4a).
+
+This is analogous to a prop-trading desk: the trader doesn't own the capital, they own
+their track record against it, and losing the allocation ends their run.
+
+**This is inherently risky real-money exposure the Boss is accepting knowingly** — not
+a limitation to be engineered away, a deliberate choice.
+
 ## 4. Non-goals (v1)
 - Not building a multi-user SaaS product.
 - Not automating tax filing itself — only automating the *reserve* calculation.
