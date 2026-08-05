@@ -21,7 +21,7 @@ class Agent(Base):
     paused = Column(Boolean, nullable=False, default=False)
     born_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     died_at = Column(DateTime, nullable=True)
-    last_evaluated_at = Column(DateTime, nullable=True)  # Pauses dead-man timer during outages
+    last_evaluated_at = Column(DateTime, nullable=True)  # Tracks last execution (does NOT pause timer)
     cause_of_death = Column(Text, nullable=True)
     last_income_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 

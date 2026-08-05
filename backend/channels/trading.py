@@ -99,7 +99,7 @@ class TradingChannel:
         self.data_client = StockHistoricalDataClient(api_key, secret_key)
         self.paper = paper
 
-    def execute(self, symbol: str, qty: int, side: str, agent_balance=None) -> Decimal:
+    def execute(self, symbol: str, qty: int, side: str, agent_balance=None, agent_id=None) -> Decimal:
         """
         Place a market order and return the net P&L as a Decimal.
 
@@ -134,12 +134,16 @@ class TradingChannel:
         order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
         # Submit the order
-        order_request = MarketOrderRequest(
-            symbol=symbol,
-            qty=qty,
-            side=order_side,
-            time_in_force=TimeInForce.DAY,
-        )
+        order_kwargs = {
+            "symbol": symbol,
+            "qty": qty,
+            "side": order_side,
+            "time_in_force": TimeInForce.DAY,
+        }
+        if agent_id:
+            order_kwargs["client_order_id"] = str(agent_id)
+
+        order_request = MarketOrderRequest(**order_kwargs)
         self.trading_client.submit_order(order_request)
 
         if side == "buy":

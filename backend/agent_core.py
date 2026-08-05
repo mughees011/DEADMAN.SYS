@@ -283,7 +283,8 @@ def run_agent_cycle(agent_id, session: Session) -> None:
                 symbol=symbol,
                 qty=qty,
                 side=side,
-                agent_balance=agent.balance
+                agent_balance=agent.balance,
+                agent_id=agent.id,
             )
             log.info(
                 "Agent %s traded %s %s x%d → net $%s",
