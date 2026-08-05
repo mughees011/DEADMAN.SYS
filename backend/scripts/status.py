@@ -26,8 +26,7 @@ else:
     print(f"Agent:   {agent.name} (Gen {agent.generation})")
     print(f"Balance: ${agent.balance:.2f}")
     
-    evaluated_at = agent.last_evaluated_at or agent.born_at
-    days_since_income = (evaluated_at - agent.last_income_at).days
+    days_since_income = (datetime.utcnow() - agent.last_income_at).days
     print(f"Status:  {7 - days_since_income} days remaining on Dead-Man timer")
     
     if agent.paused:
