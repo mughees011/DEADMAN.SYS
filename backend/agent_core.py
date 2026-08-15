@@ -24,6 +24,9 @@ import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest
+
 import litellm
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
@@ -70,7 +73,7 @@ def _get_db_session() -> tuple:
     return engine, sessionmaker(bind=engine)
 
 
-def _build_situation(agent: Agent, session: Session) -> str:
+def _build_situation(agent: Agent, session: Session, market_snapshot_text: str) -> str:
     """Construct the human-readable situation snapshot passed to the LLM."""
     days_since_income = (datetime.utcnow() - agent.last_income_at).days
 
@@ -118,6 +121,9 @@ AGENT STATUS
   Days since income: {days_since_income} / 7 (die at 7)
   Alive:             {agent.alive}
 
+MARKET SNAPSHOT:
+{market_snapshot_text or "  (No market data available)"}
+
 LAST CYCLE RESULT:
 {last_cycle_text}
 
@@ -163,13 +169,49 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         session.commit()
         return
 
+    # ── Fetch Market Snapshot ────────────────────────────────────────────────
+    market_snapshot_text = ""
+    snapshot_data = {}
+    try:
+        api_key = os.environ["APCA_API_KEY_ID"]
+        secret_key = os.environ["APCA_API_SECRET_KEY"]
+        data_client = StockHistoricalDataClient(api_key, secret_key)
+        
+        symbols = ["SPY", "QQQ", "AAPL", "GLD"]
+        req = StockLatestTradeRequest(symbol_or_symbols=symbols)
+        latest_trades = data_client.get_stock_latest_trade(req)
+        
+        lines = []
+        for sym, trade in latest_trades.items():
+            price = trade.price
+            snapshot_data[sym] = float(price)
+            lines.append(f"  • {sym}: ${price:.2f}")
+        market_snapshot_text = "\n".join(lines)
+        
+    except Exception as data_err:
+        log.error("Failed to fetch market data for agent %s: %s", agent.name, data_err)
+        # TRD §12 & Phase 1.5: Broker failure -> log error, do not touch balance, skip decision
+        log_row = AgentLog(
+            agent_id=agent.id,
+            cycle_at=datetime.utcnow(),
+            situation_snapshot={},
+            plan_text="(Market data fetch failed — no action taken)",
+            legality_justification="(N/A)",
+            error=str(data_err),
+        )
+        session.add(log_row)
+        check_deadman_only(session, agent)
+        session.commit()
+        return
+
     # ── Build situation snapshot ──────────────────────────────────────────────
-    situation = _build_situation(agent, session)
+    situation = _build_situation(agent, session, market_snapshot_text)
     snapshot = {
         "balance": str(agent.balance),
         "tax_reserve": str(agent.tax_reserve),
         "days_since_income": (datetime.utcnow() - agent.last_income_at).days,
         "last_income_at": agent.last_income_at.isoformat(),
+        "market_data": snapshot_data,
     }
 
     # Pre-build the log row (we always write it, even on error — TRD §12)

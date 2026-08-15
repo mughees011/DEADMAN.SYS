@@ -27,6 +27,14 @@ must be provably correct before the next one is layered on.
 (paper) trades, potentially die or spawn, and every row in `agent_logs` accurately
 reflects what happened — checked by hand against Alpaca's paper dashboard.
 
+## Phase 1.5 — Extended Paper Trading & Market Data Injection
+1. Instead of a `get_price` tool (which violates the one-action-per-hour limit), inject a "Market Snapshot" of highly liquid ETFs/Stocks (e.g., SPY, QQQ, AAPL, GLD) directly into the agent's prompt during `_build_situation`.
+2. Ensure this snapshot is serialized and written to `agent_logs.situation_snapshot` so the exact prices seen by the agent are forever preserved in the audit trail.
+3. Handle Alpaca API failures during the snapshot fetch safely: log the error, skip the decision entirely, and do NOT touch the balance (exactly like LLM/broker failures).
+4. Manually provision Agent_02 exactly like Agent_01 (Generation 0, parent_id=NULL, fresh seed) and let it run.
+
+**Done when:** Agent_02 executes at least 5 real (paper) trades across at least 5 separate days, at least one tax-reserve deduction is verified correct, and the decision log shows justifications that explicitly reference the actual injected price data rather than generic reasoning.
+
 ## Phase 2 — Trading channel, live
 1. Flip `APCA_PAPER=false` only after Phase 1's audit trail has been manually verified
    against the broker's own records for at least one full week.

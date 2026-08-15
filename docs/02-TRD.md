@@ -72,7 +72,12 @@ Everything an implementer (human or AI) needs so no tool, library, or API is gue
 │ Scheduler    │ ───────────────────▶ │ Agent Core Loop   │
 │ (APScheduler)│                       │ (agent_core.py)   │
 └─────────────┘                       └───────┬───────────┘
-                                               │ tool-use call
+                                               │ fetch prices
+                                               ▼
+                                       ┌──────────────────┐
+                                       │ Market Data API  │
+                                       └───────┬───────────┘
+                                               │ inject into prompt
                                                ▼
                                        ┌──────────────────┐
                                        │ Anthropic API      │
@@ -94,6 +99,9 @@ Everything an implementer (human or AI) needs so no tool, library, or API is gue
                                        │ FastAPI backend   │◀── Boss dashboard (React)
                                        └──────────────────┘
 ```
+
+**Market Data Injection Constraint:** 
+Because the agent core strictly enforces exactly *one* tool call per cycle (e.g. `execute_trade` OR `wait`), the agent cannot use a tool to look up market data and then trade in the same cycle. To solve this without breaking the one-call constraint, `agent_core.py` fetches a small snapshot of real-time market data (e.g., SPY, QQQ prices) *before* calling the LLM and injects it directly into the `situation_snapshot`. This data is saved into the database so the audit trail perfectly records what prices the agent saw when it made its decision.
 
 ## 7. Kill switch mechanism
 - Implemented as a row in the database (`system_state.kill_switch = true/false`),
