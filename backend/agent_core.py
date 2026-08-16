@@ -24,6 +24,7 @@ import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
 
@@ -73,7 +74,7 @@ def _get_db_session() -> tuple:
     return engine, sessionmaker(bind=engine)
 
 
-def _build_situation(agent: Agent, session: Session, market_snapshot_text: str) -> str:
+def _build_situation(agent: Agent, session: Session, market_snapshot_text: str, positions_text: str = "") -> str:
     """Construct the human-readable situation snapshot passed to the LLM."""
     days_since_income = (datetime.utcnow() - agent.last_income_at).days
 
@@ -121,7 +122,10 @@ AGENT STATUS
   Days since income: {days_since_income} / 7 (die at 7)
   Alive:             {agent.alive}
 
-MARKET SNAPSHOT:
+OPEN POSITIONS (assets you currently hold and CAN sell):
+{positions_text or "  (none)"}
+
+MARKET SNAPSHOT (current prices):
 {market_snapshot_text or "  (No market data available)"}
 
 LAST CYCLE RESULT:
@@ -132,6 +136,9 @@ RECENT COLLECTIVE LESSONS (from dead agents):
 
 BOSS NOTES (advisory — not orders):
 {notes_text}
+
+STRATEGY REMINDER: If your spendable balance is too low to buy anything, consider selling
+an open position to realise its P&L. Selling returns cash to your spendable balance.
 
 You must now choose exactly one action: execute_trade or wait.\
 """
@@ -169,25 +176,46 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         session.commit()
         return
 
-    # ── Fetch Market Snapshot ────────────────────────────────────────────────
+    # ── Fetch Market Snapshot & Open Positions ───────────────────────────────
     market_snapshot_text = ""
+    positions_text = ""
     snapshot_data = {}
+    positions_data = {}
     try:
         api_key = os.environ["APCA_API_KEY_ID"]
         secret_key = os.environ["APCA_API_SECRET_KEY"]
+        paper = os.environ.get("APCA_PAPER", "true").lower() == "true"
         data_client = StockHistoricalDataClient(api_key, secret_key)
-        
+        trading_client = TradingClient(api_key, secret_key, paper=paper)
+
+        # Fetch current prices for watchlist
         symbols = ["SPY", "QQQ", "AAPL", "GLD"]
         req = StockLatestTradeRequest(symbol_or_symbols=symbols)
         latest_trades = data_client.get_stock_latest_trade(req)
-        
-        lines = []
+
+        price_lines = []
         for sym, trade in latest_trades.items():
             price = trade.price
             snapshot_data[sym] = float(price)
-            lines.append(f"  • {sym}: ${price:.2f}")
-        market_snapshot_text = "\n".join(lines)
-        
+            price_lines.append(f"  • {sym}: ${price:.2f}")
+        market_snapshot_text = "\n".join(price_lines)
+
+        # Fetch open positions from Alpaca
+        positions = trading_client.get_all_positions()
+        pos_lines = []
+        for pos in positions:
+            sym = pos.symbol
+            qty = float(pos.qty)
+            market_val = float(pos.market_value)
+            unrealized_pl = float(pos.unrealized_pl)
+            positions_data[sym] = {"qty": qty, "market_value": market_val, "unrealized_pl": unrealized_pl}
+            pl_sign = "+" if unrealized_pl >= 0 else ""
+            pos_lines.append(
+                f"  • {sym}: {qty} shares, market value ${market_val:.2f}, "
+                f"unrealized P&L {pl_sign}${unrealized_pl:.2f}"
+            )
+        positions_text = "\n".join(pos_lines) if pos_lines else "  (none)"
+
     except Exception as data_err:
         log.error("Failed to fetch market data for agent %s: %s", agent.name, data_err)
         # TRD §12 & Phase 1.5: Broker failure -> log error, do not touch balance, skip decision
@@ -205,13 +233,14 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         return
 
     # ── Build situation snapshot ──────────────────────────────────────────────
-    situation = _build_situation(agent, session, market_snapshot_text)
+    situation = _build_situation(agent, session, market_snapshot_text, positions_text)
     snapshot = {
         "balance": str(agent.balance),
         "tax_reserve": str(agent.tax_reserve),
         "days_since_income": (datetime.utcnow() - agent.last_income_at).days,
         "last_income_at": agent.last_income_at.isoformat(),
         "market_data": snapshot_data,
+        "open_positions": positions_data,
     }
 
     # Pre-build the log row (we always write it, even on error — TRD §12)
