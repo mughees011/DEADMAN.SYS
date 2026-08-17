@@ -432,6 +432,21 @@ def run_agent_cycle(agent_id, session: Session) -> None:
             session.commit()
             return
 
+        # ── Validate sell ownership ───────────────────────────────────────────
+        if side == "sell":
+            pos = session.query(Position).filter_by(agent_id=agent.id, symbol=symbol).first()
+            if not pos or pos.qty < qty:
+                err_msg = (
+                    f"Rejected trade: Cannot sell {qty} shares of {symbol}. "
+                    f"Agent owns {pos.qty if pos else 0} shares."
+                )
+                log.warning("Agent %s: %s", agent.name, err_msg)
+                log_row.error = err_msg
+                agent.last_evaluated_at = datetime.utcnow()
+                check_deadman_only(session, agent)
+                session.commit()
+                return
+
         # ── Execute channel ───────────────────────────────────────────────────
         try:
             channel = TradingChannel()
