@@ -8,6 +8,8 @@ Responsibilities:
 - NEVER simulate or fabricate numbers — all results come from the broker.
 """
 import os
+import uuid
+from datetime import datetime
 from decimal import Decimal
 
 from alpaca.trading.client import TradingClient
@@ -141,9 +143,25 @@ class TradingChannel:
             "time_in_force": TimeInForce.DAY,
         }
         if agent_id:
-            order_kwargs["client_order_id"] = str(agent_id)
+            # Must be unique per order — prefix with agent_id for attribution,
+            # suffix with a fresh UUID so repeated orders never collide.
+            order_kwargs["client_order_id"] = f"{agent_id}_{uuid.uuid4().hex[:12]}"
 
         order_request = MarketOrderRequest(**order_kwargs)
+
+        # Cancel any open orders for this symbol before submitting — stale pending
+        # orders on the opposite side trigger Alpaca's wash-trade rejection (code 40310000).
+        try:
+            from alpaca.trading.requests import GetOrdersRequest
+            from alpaca.trading.enums import QueryOrderStatus
+            open_orders = self.trading_client.get_orders(
+                GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+            )
+            for o in open_orders:
+                self.trading_client.cancel_order_by_id(o.id)
+        except Exception:
+            pass  # Best-effort; if cancel fails, let submit attempt surface the real error
+
         self.trading_client.submit_order(order_request)
 
         if side == "buy":
