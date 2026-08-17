@@ -17,7 +17,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from models import Agent, AgentLog, Lesson
+from models import Agent, AgentLog, Lesson, Position
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,28 @@ def apply_income_result(
                     not yet committed). We set net_result and tax_deducted here.
         net_result: Real net P&L from the channel (may be negative).
     """
+    # ── Position Update ───────────────────────────────────────────────────────
+    if log_row.situation_snapshot and "executed_trade" in log_row.situation_snapshot:
+        trade = log_row.situation_snapshot["executed_trade"]
+        symbol = trade.get("symbol")
+        qty = trade.get("qty")
+        side = trade.get("side")
+
+        if symbol and qty and side:
+            pos = session.query(Position).filter_by(agent_id=agent.id, symbol=symbol).first()
+            if not pos:
+                pos = Position(agent_id=agent.id, symbol=symbol, qty=0.0)
+                session.add(pos)
+            
+            if side == "buy":
+                pos.qty += float(qty)
+            elif side == "sell":
+                pos.qty -= float(qty)
+            
+            # Cleanup if closed
+            if abs(pos.qty) < 1e-6:
+                session.delete(pos)
+
     # ── 1. Tax reserve ────────────────────────────────────────────────────────
     tax_deducted = Decimal("0.00")
     if net_result > 0:

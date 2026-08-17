@@ -26,6 +26,11 @@ else:
     print(f"Agent:   {agent.name} (Gen {agent.generation})")
     print(f"Balance: ${agent.balance:.2f}")
     
+    # Use datetime.utcnow() carefully, or better yet, just suppress the warning for now
+    # to match the rest of the system which uses utcnow() extensively.
+    import warnings
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    
     days_since_income = (datetime.utcnow() - agent.last_income_at).days
     print(f"Status:  {7 - days_since_income} days remaining on Dead-Man timer")
     

@@ -25,7 +25,7 @@ export default function Roster() {
 
   if (!state) return <div className="p-8 text-dim animate-pulse">LOADING_DATA...</div>;
 
-  const totalBalance = agents.reduce((sum, a) => sum + (a.alive ? a.balance : 0), 0);
+  const totalBalance = agents.reduce((sum, a) => sum + (a.alive ? parseFloat(a.balance) : 0), 0);
   const aliveCount = agents.filter(a => a.alive).length;
   const deadCount = agents.filter(a => !a.alive).length;
   

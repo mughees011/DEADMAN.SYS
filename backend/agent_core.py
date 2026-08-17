@@ -74,6 +74,86 @@ def _get_db_session() -> tuple:
     return engine, sessionmaker(bind=engine)
 
 
+def reconcile_positions(session: Session) -> None:
+    from models import Agent, Position, SystemState
+    import os
+    from collections import defaultdict
+    from alpaca.trading.client import TradingClient
+    
+    if os.environ.get("BYPASS_RECONCILIATION", "false").lower() == "true":
+        return
+
+    # 1. Fetch Alpaca current state first
+    api_key = os.environ["APCA_API_KEY_ID"]
+    secret_key = os.environ["APCA_API_SECRET_KEY"]
+    paper = os.environ.get("APCA_PAPER", "true").lower() == "true"
+    client = TradingClient(api_key, secret_key, paper=paper)
+    
+    try:
+        acct = client.get_account()
+        alpaca_cash_now = float(acct.cash)
+        alpaca_positions = {}
+        for pos in client.get_all_positions():
+            alpaca_positions[pos.symbol] = float(pos.qty)
+    except Exception as e:
+        log.warning(f"Reconciliation skip: Failed to fetch Alpaca account: {e}")
+        return
+
+    # 2. Load or initialise baselines in SystemState
+    state = session.query(SystemState).first()
+    if state and state.alpaca_cash_baseline is None:
+        # First run — calibrate baselines from current reality
+        agents = session.query(Agent).all()
+        state.alpaca_cash_baseline = alpaca_cash_now
+        state.agents_balance_baseline = float(sum(a.balance for a in agents))
+        session.commit()
+        session.refresh(state)
+        log.info(
+            "Reconciliation baselines initialised: Alpaca cash $%.2f, agents sum $%.2f",
+            state.alpaca_cash_baseline, state.agents_balance_baseline
+        )
+        return  # Nothing to compare yet on first run
+
+    alpaca_baseline = state.alpaca_cash_baseline if state.alpaca_cash_baseline is not None else alpaca_cash_now
+    agents_baseline = state.agents_balance_baseline if state.agents_balance_baseline is not None else 5000.0
+
+    # 3. Virtual sums
+    agents = session.query(Agent).all()
+    virtual_cash = float(sum(a.balance for a in agents))
+    virtual_pnl = virtual_cash - agents_baseline
+
+    alpaca_pnl = alpaca_cash_now - alpaca_baseline
+    
+    virtual_positions = defaultdict(float)
+    positions = session.query(Position).all()
+    for pos in positions:
+        virtual_positions[pos.symbol] += pos.qty
+
+    # 4. Check tolerances (allow $1.00 for rounding; fractional shares not in use)
+    errors = []
+    if abs(virtual_pnl - alpaca_pnl) > 1.00:
+        errors.append(
+            f"Cash mismatch: Virtual PnL ${virtual_pnl:.2f} != Alpaca PnL ${alpaca_pnl:.2f} "
+            f"(baselines: agents ${agents_baseline:.2f}, alpaca ${alpaca_baseline:.2f})"
+        )
+
+    all_symbols = set(virtual_positions.keys()) | set(alpaca_positions.keys())
+    for sym in all_symbols:
+        v_qty = virtual_positions.get(sym, 0.0)
+        a_qty = alpaca_positions.get(sym, 0.0)
+        if abs(v_qty - a_qty) > 1e-6:
+            errors.append(f"Position mismatch {sym}: Virtual {v_qty} != Alpaca {a_qty}")
+
+    # 5. Trigger Kill Switch
+    if errors:
+        state.kill_switch = True
+        state.kill_switch_set_at = datetime.utcnow()
+        state.updated_by = "system_reconciliation"
+        session.commit()
+        log.critical("RECONCILIATION FAILED. KILL SWITCH ENGAGED. Errors: %s", " | ".join(errors))
+        raise RuntimeError("Reconciliation failed. Halting.")
+
+
 def _build_situation(agent: Agent, session: Session, market_snapshot_text: str, positions_text: str = "") -> str:
     """Construct the human-readable situation snapshot passed to the LLM."""
     days_since_income = (datetime.utcnow() - agent.last_income_at).days
@@ -200,19 +280,24 @@ def run_agent_cycle(agent_id, session: Session) -> None:
             price_lines.append(f"  • {sym}: ${price:.2f}")
         market_snapshot_text = "\n".join(price_lines)
 
-        # Fetch open positions from Alpaca
-        positions = trading_client.get_all_positions()
+        # Fetch virtual positions from local database
+        from models import Position
+        positions = session.query(Position).filter_by(agent_id=agent.id).all()
         pos_lines = []
         for pos in positions:
             sym = pos.symbol
             qty = float(pos.qty)
-            market_val = float(pos.market_value)
-            unrealized_pl = float(pos.unrealized_pl)
-            positions_data[sym] = {"qty": qty, "market_value": market_val, "unrealized_pl": unrealized_pl}
-            pl_sign = "+" if unrealized_pl >= 0 else ""
+            if qty <= 0:
+                continue
+            
+            market_val = 0.0
+            if sym in snapshot_data:
+                market_val = qty * snapshot_data[sym]
+                
+            positions_data[sym] = {"qty": qty, "market_value": market_val}
             pos_lines.append(
-                f"  • {sym}: {qty} shares, market value ${market_val:.2f}, "
-                f"unrealized P&L {pl_sign}${unrealized_pl:.2f}"
+                f"  • {sym}: {qty} shares, current market value ~${market_val:.2f} "
+                f"(unrealized P&L not tracked locally)"
             )
         positions_text = "\n".join(pos_lines) if pos_lines else "  (none)"
 
@@ -357,6 +442,13 @@ def run_agent_cycle(agent_id, session: Session) -> None:
                 agent_balance=agent.balance,
                 agent_id=agent.id,
             )
+            
+            if log_row.situation_snapshot is None:
+                log_row.situation_snapshot = {}
+            new_snap = dict(log_row.situation_snapshot)
+            new_snap["executed_trade"] = {"symbol": symbol, "qty": qty, "side": side}
+            log_row.situation_snapshot = new_snap
+            
             log.info(
                 "Agent %s traded %s %s x%d → net $%s",
                 agent.name, side, symbol, qty, net_result,
@@ -399,6 +491,12 @@ def run_all_cycles() -> None:
         if state and state.kill_switch:
             log.warning("Kill switch is ENGAGED — all cycles aborted this tick.")
             return
+
+        # ── Reconciliation Check ──────────────────────────────────────────────────
+        try:
+            reconcile_positions(session)
+        except RuntimeError:
+            return  # Kill switch engaged, abort this tick
 
         alive_agents = session.query(Agent).filter_by(alive=True).all()
         log.info("Starting cycle tick: %d alive agent(s).", len(alive_agents))

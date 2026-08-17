@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, UUID, JSON
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, UUID, JSON, Float, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -90,3 +90,19 @@ class SystemState(Base):
     kill_switch = Column(Boolean, nullable=False, default=False)
     kill_switch_set_at = Column(DateTime, nullable=True)
     updated_by = Column(String, nullable=False, default="boss")
+    # Baseline Alpaca cash at the moment this system was first started.
+    # Used by reconcile_positions() to compute PnL without hardcoding $100,000.
+    alpaca_cash_baseline = Column(Float, nullable=True)
+    agents_balance_baseline = Column(Float, nullable=True)
+
+class Position(Base):
+    __tablename__ = 'positions'
+    
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(UUID(as_uuid=True), ForeignKey('agents.id'), nullable=False)
+    symbol = Column(String, nullable=False)
+    qty = Column(Float, nullable=False, default=0.0)
+    
+    __table_args__ = (
+        UniqueConstraint('agent_id', 'symbol', name='uq_agent_symbol'),
+    )
