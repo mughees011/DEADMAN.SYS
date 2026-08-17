@@ -105,7 +105,7 @@ def reconcile_positions(session: Session) -> None:
         # First run — calibrate baselines from current reality
         agents = session.query(Agent).all()
         state.alpaca_cash_baseline = alpaca_cash_now
-        state.agents_balance_baseline = float(sum(a.balance for a in agents))
+        state.agents_balance_baseline = float(sum(a.balance + a.tax_reserve for a in agents))
         session.commit()
         session.refresh(state)
         log.info(
@@ -119,7 +119,7 @@ def reconcile_positions(session: Session) -> None:
 
     # 3. Virtual sums
     agents = session.query(Agent).all()
-    virtual_cash = float(sum(a.balance for a in agents))
+    virtual_cash = float(sum(a.balance + a.tax_reserve for a in agents))
     virtual_pnl = virtual_cash - agents_baseline
 
     alpaca_pnl = alpaca_cash_now - alpaca_baseline
