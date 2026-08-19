@@ -147,6 +147,18 @@ class TradingChannel:
             # suffix with a fresh UUID so repeated orders never collide.
             order_kwargs["client_order_id"] = f"{agent_id}_{uuid.uuid4().hex[:12]}"
 
+        # ── Market hours check ────────────────────────────────────────────────
+        # DAY orders submitted outside regular market hours (09:30–16:00 ET Mon–Fri)
+        # sit as pending until the next open, causing reconciliation mismatches.
+        # We reject outright so the virtual ledger is never touched.
+        clock = self.trading_client.get_clock()
+        if not clock.is_open:
+            next_open_str = clock.next_open.strftime("%Y-%m-%d %H:%M UTC")
+            raise ValueError(
+                f"Market is closed. Order for {qty}x {symbol} rejected. "
+                f"Next open: {next_open_str}. Agent should WAIT this cycle."
+            )
+
         order_request = MarketOrderRequest(**order_kwargs)
 
         # Cancel any open orders for this symbol before submitting — stale pending

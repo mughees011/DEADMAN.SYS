@@ -40,7 +40,14 @@ from lifecycle import apply_income_result, check_deadman_only
 load_dotenv()
 log = logging.getLogger(__name__)
 
-LLM_MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-6")
+# Primary model from env, with automatic fallbacks if model is unavailable
+_PRIMARY_MODEL = os.environ.get("LLM_MODEL", "groq/openai/gpt-oss-120b")
+_FALLBACK_MODELS = [
+    "groq/openai/gpt-oss-120b",
+    "groq/llama-3.3-70b-versatile",
+    "groq/llama3-70b-8192",
+]
+LLM_MODEL = _PRIMARY_MODEL  # kept for logging
 
 # Minimum length for legality_justification to be considered non-trivial.
 MIN_JUSTIFICATION_CHARS = 60
@@ -269,7 +276,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         trading_client = TradingClient(api_key, secret_key, paper=paper)
 
         # Fetch current prices for watchlist
-        symbols = ["SPY", "QQQ", "AAPL", "GLD"]
+        symbols = ["SPUS", "HLAL", "SPSK", "AAPL", "UMMA"]
         req = StockLatestTradeRequest(symbol_or_symbols=symbols)
         latest_trades = data_client.get_stock_latest_trade(req)
 
@@ -338,25 +345,36 @@ def run_agent_cycle(agent_id, session: Session) -> None:
     )
     session.add(log_row)
 
-    # ── LLM call ─────────────────────────────────────────────────────────────
+    # ── LLM call — tries primary model then fallbacks ────────────────────────
     response = None
     last_err = None
-    for attempt in range(3):
-        try:
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": situation},
-            ]
-            response = litellm.completion(
-                model=LLM_MODEL,
-                messages=messages,
-                tools=ALL_TOOLS,
-                tool_choice="auto",
-            )
-            break  # Success
-        except Exception as llm_err:
-            last_err = llm_err
-            log.warning("LLM call attempt %d failed for agent %s: %s", attempt + 1, agent.name, llm_err)
+    models_to_try = [_PRIMARY_MODEL] + [m for m in _FALLBACK_MODELS if m != _PRIMARY_MODEL]
+    for model in models_to_try:
+        for attempt in range(2):  # 2 retries per model
+            try:
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": situation},
+                ]
+                response = litellm.completion(
+                    model=model,
+                    messages=messages,
+                    tools=ALL_TOOLS,
+                    tool_choice="auto",
+                )
+                if model != _PRIMARY_MODEL:
+                    log.warning("Agent %s: using fallback model %s.", agent.name, model)
+                break  # Success — move on
+            except Exception as llm_err:
+                last_err = llm_err
+                err_str = str(llm_err)
+                # Model not found / auth errors: skip to next model immediately
+                if "model_not_found" in err_str or "does not exist" in err_str or "NotFoundError" in err_str:
+                    log.warning("Model %s not available, trying next fallback.", model)
+                    break
+                log.warning("LLM attempt %d/%s for agent %s: %s", attempt + 1, model, agent.name, err_str[:120])
+        if response:
+            break
 
     if not response:
         # TRD §12: LLM failure → log error, do not touch balance or last_income_at
