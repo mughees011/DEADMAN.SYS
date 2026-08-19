@@ -49,19 +49,19 @@ _FALLBACK_MODELS = [
 ]
 LLM_MODEL = _PRIMARY_MODEL  # kept for logging
 
+ALLOWED_SYMBOLS = ["SPUS", "HLAL", "SPSK", "AAPL", "UMMA"]
+
 # Minimum length for legality_justification to be considered non-trivial.
 MIN_JUSTIFICATION_CHARS = 60
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT = f"""\
 You are an autonomous trading agent in the DEADMAN.SYS survival system.
 
 Rules you must never break:
 1. You must generate real income to survive. Your balance must stay above $0.
    If your balance hits $0 or you earn nothing for 7 consecutive real days, you die permanently.
-2. Every trade must be LEGAL. You must explain why in legality_justification using a full,
-   specific sentence — not a label, not a code. Example of VALID justification:
-   "Buying SPY via a market order on a registered US exchange using only publicly available
-   price data; no insider information, no manipulation, position is < 5% of NAV."
+2. Every trade must be LEGAL and strictly Sharia-compliant (Halal). You may ONLY trade the following approved symbols: {', '.join(ALLOWED_SYMBOLS)}. You must explain why in legality_justification using a full, specific sentence — not a label, not a code. Example of VALID justification:
+   "Buying AAPL via a market order on a registered US exchange using only publicly available price data; no insider information, no manipulation, position is < 5% of NAV."
 3. When in doubt, choose wait(). An unexplained trade is worse than no trade.
 4. You have access to one channel: execute_trade (Alpaca stock/ETF market orders, paper mode).
 5. You must call exactly ONE tool per cycle: either execute_trade or wait.
@@ -136,59 +136,29 @@ def reconcile_positions(session: Session) -> None:
     for pos in positions:
         virtual_positions[pos.symbol] += pos.qty
 
-    # 4. Check tolerances
-    cash_ok = abs(virtual_pnl - alpaca_pnl) <= 50.00  # allow up to $50 drift before kill switch
-    pos_errors = []
+    # 4. Check tolerances (allow $1.00 for rounding; fractional shares not in use)
+    errors = []
+    if abs(virtual_pnl - alpaca_pnl) > 1.00:
+        errors.append(
+            f"Cash mismatch: Virtual PnL ${virtual_pnl:.2f} != Alpaca PnL ${alpaca_pnl:.2f} "
+            f"(baselines: agents ${agents_baseline:.2f}, alpaca ${alpaca_baseline:.2f})"
+        )
 
     all_symbols = set(virtual_positions.keys()) | set(alpaca_positions.keys())
     for sym in all_symbols:
         v_qty = virtual_positions.get(sym, 0.0)
         a_qty = alpaca_positions.get(sym, 0.0)
         if abs(v_qty - a_qty) > 1e-6:
-            pos_errors.append((sym, v_qty, a_qty))
+            errors.append(f"Position mismatch {sym}: Virtual {v_qty} != Alpaca {a_qty}")
 
-    # 5. Auto-heal position mismatches by syncing virtual DB to Alpaca truth
-    if pos_errors:
-        log.warning("Reconciliation: position drift detected — auto-healing virtual DB to match Alpaca truth.")
-        # Find the primary alive agent to attribute untracked positions to
-        primary_agent = session.query(Agent).filter_by(alive=True, parent_id=None).first()
-        if primary_agent is None:
-            primary_agent = session.query(Agent).filter_by(alive=True).first()
-
-        for sym, v_qty, a_qty in pos_errors:
-            if a_qty == 0.0:
-                # Alpaca has no position — delete virtual record
-                session.query(Position).filter_by(symbol=sym).delete(synchronize_session=False)
-                log.warning("Auto-heal: removed stale virtual position %s (had %.0f shares)", sym, v_qty)
-            else:
-                # Alpaca has the position — sync virtual to match
-                # Sum all virtual rows for this symbol
-                existing = session.query(Position).filter_by(symbol=sym).all()
-                total_virtual = sum(p.qty for p in existing)
-                if abs(total_virtual - a_qty) > 1e-6:
-                    # Clear all rows for this symbol and write correct total under primary agent
-                    session.query(Position).filter_by(symbol=sym).delete(synchronize_session=False)
-                    if primary_agent:
-                        session.add(Position(agent_id=primary_agent.id, symbol=sym, qty=a_qty))
-                    log.warning(
-                        "Auto-heal: corrected virtual position %s from %.0f to %.0f shares",
-                        sym, total_virtual, a_qty
-                    )
-        session.commit()
-        log.info("Reconciliation: position auto-heal complete.")
-
-    # 6. Only engage kill switch for large unrecoverable cash drift
-    if not cash_ok:
+    # 5. Trigger Kill Switch
+    if errors:
         state.kill_switch = True
         state.kill_switch_set_at = datetime.utcnow()
         state.updated_by = "system_reconciliation"
         session.commit()
-        log.critical(
-            "RECONCILIATION FAILED. KILL SWITCH ENGAGED. Cash mismatch: "
-            "Virtual PnL $%.2f != Alpaca PnL $%.2f (baselines: agents $%.2f, alpaca $%.2f)",
-            virtual_pnl, alpaca_pnl, agents_baseline, alpaca_baseline
-        )
-        raise RuntimeError("Reconciliation failed: cash drift too large. Halting.")
+        log.critical("RECONCILIATION FAILED. KILL SWITCH ENGAGED. Errors: %s", " | ".join(errors))
+        raise RuntimeError("Reconciliation failed. Halting.")
 
 
 def _build_situation(agent: Agent, session: Session, market_snapshot_text: str, positions_text: str = "") -> str:
@@ -473,6 +443,16 @@ def run_agent_cycle(agent_id, session: Session) -> None:
                 f"Rejected trade: legality_justification too short or label-like "
                 f"({len(justification)} chars). Trade aborted."
             )
+            log.warning("Agent %s: %s", agent.name, err_msg)
+            log_row.error = err_msg
+            agent.last_evaluated_at = datetime.utcnow()
+            check_deadman_only(session, agent)
+            session.commit()
+            return
+
+        # ── Validate allowed symbols (Halal compliance) ───────────────────────
+        if side == "buy" and symbol not in ALLOWED_SYMBOLS:
+            err_msg = f"Rejected trade: Symbol {symbol} is not in the approved Halal list."
             log.warning("Agent %s: %s", agent.name, err_msg)
             log_row.error = err_msg
             agent.last_evaluated_at = datetime.utcnow()
