@@ -40,7 +40,7 @@ def main():
             minutes=interval_minutes,
             id="agent_cycle",
             name="All-agent cycle tick",
-            misfire_grace_time=60,    # tolerate up to 1-min late fire
+            misfire_grace_time=None,  # run missed cycles immediately upon wake (no matter how late)
             coalesce=True,            # if multiple fires were missed, run once not many
             max_instances=1,          # never run two ticks simultaneously
         )

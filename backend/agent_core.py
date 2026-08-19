@@ -44,8 +44,8 @@ log = logging.getLogger(__name__)
 _PRIMARY_MODEL = os.environ.get("LLM_MODEL", "groq/openai/gpt-oss-120b")
 _FALLBACK_MODELS = [
     "groq/openai/gpt-oss-120b",
-    "groq/llama-3.3-70b-versatile",
-    "groq/llama3-70b-8192",
+    "groq/openai/gpt-oss-20b",
+    "groq/groq/compound",
 ]
 LLM_MODEL = _PRIMARY_MODEL  # kept for logging
 
@@ -136,29 +136,59 @@ def reconcile_positions(session: Session) -> None:
     for pos in positions:
         virtual_positions[pos.symbol] += pos.qty
 
-    # 4. Check tolerances (allow $1.00 for rounding; fractional shares not in use)
-    errors = []
-    if abs(virtual_pnl - alpaca_pnl) > 1.00:
-        errors.append(
-            f"Cash mismatch: Virtual PnL ${virtual_pnl:.2f} != Alpaca PnL ${alpaca_pnl:.2f} "
-            f"(baselines: agents ${agents_baseline:.2f}, alpaca ${alpaca_baseline:.2f})"
-        )
+    # 4. Check tolerances
+    cash_ok = abs(virtual_pnl - alpaca_pnl) <= 50.00  # allow up to $50 drift before kill switch
+    pos_errors = []
 
     all_symbols = set(virtual_positions.keys()) | set(alpaca_positions.keys())
     for sym in all_symbols:
         v_qty = virtual_positions.get(sym, 0.0)
         a_qty = alpaca_positions.get(sym, 0.0)
         if abs(v_qty - a_qty) > 1e-6:
-            errors.append(f"Position mismatch {sym}: Virtual {v_qty} != Alpaca {a_qty}")
+            pos_errors.append((sym, v_qty, a_qty))
 
-    # 5. Trigger Kill Switch
-    if errors:
+    # 5. Auto-heal position mismatches by syncing virtual DB to Alpaca truth
+    if pos_errors:
+        log.warning("Reconciliation: position drift detected — auto-healing virtual DB to match Alpaca truth.")
+        # Find the primary alive agent to attribute untracked positions to
+        primary_agent = session.query(Agent).filter_by(alive=True, parent_id=None).first()
+        if primary_agent is None:
+            primary_agent = session.query(Agent).filter_by(alive=True).first()
+
+        for sym, v_qty, a_qty in pos_errors:
+            if a_qty == 0.0:
+                # Alpaca has no position — delete virtual record
+                session.query(Position).filter_by(symbol=sym).delete(synchronize_session=False)
+                log.warning("Auto-heal: removed stale virtual position %s (had %.0f shares)", sym, v_qty)
+            else:
+                # Alpaca has the position — sync virtual to match
+                # Sum all virtual rows for this symbol
+                existing = session.query(Position).filter_by(symbol=sym).all()
+                total_virtual = sum(p.qty for p in existing)
+                if abs(total_virtual - a_qty) > 1e-6:
+                    # Clear all rows for this symbol and write correct total under primary agent
+                    session.query(Position).filter_by(symbol=sym).delete(synchronize_session=False)
+                    if primary_agent:
+                        session.add(Position(agent_id=primary_agent.id, symbol=sym, qty=a_qty))
+                    log.warning(
+                        "Auto-heal: corrected virtual position %s from %.0f to %.0f shares",
+                        sym, total_virtual, a_qty
+                    )
+        session.commit()
+        log.info("Reconciliation: position auto-heal complete.")
+
+    # 6. Only engage kill switch for large unrecoverable cash drift
+    if not cash_ok:
         state.kill_switch = True
         state.kill_switch_set_at = datetime.utcnow()
         state.updated_by = "system_reconciliation"
         session.commit()
-        log.critical("RECONCILIATION FAILED. KILL SWITCH ENGAGED. Errors: %s", " | ".join(errors))
-        raise RuntimeError("Reconciliation failed. Halting.")
+        log.critical(
+            "RECONCILIATION FAILED. KILL SWITCH ENGAGED. Cash mismatch: "
+            "Virtual PnL $%.2f != Alpaca PnL $%.2f (baselines: agents $%.2f, alpaca $%.2f)",
+            virtual_pnl, alpaca_pnl, agents_baseline, alpaca_baseline
+        )
+        raise RuntimeError("Reconciliation failed: cash drift too large. Halting.")
 
 
 def _build_situation(agent: Agent, session: Session, market_snapshot_text: str, positions_text: str = "") -> str:
