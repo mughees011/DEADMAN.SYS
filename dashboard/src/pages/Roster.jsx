@@ -72,7 +72,7 @@ export default function Roster() {
         </div>
         <div className="p-4">
           <div className="text-[10px] tracking-widest text-dim uppercase mb-2">Tax Reserve</div>
-          <div className="text-2xl text-danger">${(0).toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-xs ml-2 text-dim">#TODO</span></div>
+          <div className="text-2xl text-danger">${parseFloat(state.total_tax_reserve).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
         </div>
       </div>
 
@@ -131,6 +131,9 @@ export default function Roster() {
                     className={clsx("h-full transition-all", agent.alive ? "bg-alive" : "bg-danger")} 
                     style={{ width: getLifespanWidth(agent) }}
                   ></div>
+                </div>
+                <div className="text-[10px] text-danger mt-1 font-mono">
+                  Tax ${parseFloat(agent.tax_reserve).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
                 </div>
               </div>
             </div>

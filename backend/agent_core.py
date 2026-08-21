@@ -71,6 +71,54 @@ Your survival depends on your decisions. Think carefully.\
 """
 
 
+ISSUE_LOAN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "issue_loan",
+        "description": "Issue a loan to a child agent from your balance. The child must be your direct descendant.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "child_id": {
+                    "type": "string",
+                    "description": "The UUID of the child agent to lend to."
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "The dollar amount to lend."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why you are issuing this loan."
+                }
+            },
+            "required": ["child_id", "amount", "reason"]
+        }
+    }
+}
+
+MERCY_KILL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "mercy_kill",
+        "description": "Terminate a failing child agent. Allowed only if child balance < $20 or days_since_income >= 5.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "child_id": {
+                    "type": "string",
+                    "description": "The UUID of the child agent to terminate."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why you are mercy-killing this child."
+                }
+            },
+            "required": ["child_id", "reason"]
+        }
+    }
+}
+
 def _get_db_session() -> tuple:
     """Return (engine, Session factory). Uses DATABASE_URL env or defaults to local survival.db."""
     db_url = os.environ.get(
@@ -359,7 +407,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
                 response = litellm.completion(
                     model=model,
                     messages=messages,
-                    tools=ALL_TOOLS,
+                    tools=ALL_TOOLS + [ISSUE_LOAN_TOOL, MERCY_KILL_TOOL],
                     tool_choice="auto",
                 )
                 if model != _PRIMARY_MODEL:
@@ -401,7 +449,7 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         return
 
     tool_call = message.tool_calls[0]
-    tool_name = tool_call.function.name
+    tool_name = tool_call.function.name.replace("functions.", "")
     try:
         args = json.loads(tool_call.function.arguments)
     except json.JSONDecodeError as e:
@@ -510,6 +558,75 @@ def run_agent_cycle(agent_id, session: Session) -> None:
         session.commit()
         return
 
+    # ── Handle: issue_loan ────────────────────────────────────────────────────
+    if tool_name == "issue_loan":
+        from models import Loan
+        child_id = args.get("child_id")
+        amount = Decimal(str(args.get("amount", 0)))
+        reason = args.get("reason", "")
+        log_row.chosen_channel = None
+        log_row.plan_text = f"ISSUE LOAN — ${amount} to {child_id}: {reason}"
+        log_row.legality_justification = "(loan issuance)"
+
+        child = session.query(Agent).filter_by(id=child_id).first()
+        if not child or child.parent_id != agent.id:
+            log_row.error = "Rejected: Target is not a direct child of this agent."
+        elif amount <= 0:
+            log_row.error = "Rejected: Amount must be > 0."
+        elif agent.balance < amount:
+            log_row.error = f"Rejected: Insufficient balance (${agent.balance:.2f} < ${amount:.2f})."
+        else:
+            agent.balance -= amount
+            child.balance += amount
+            new_loan = Loan(
+                lender_id=agent.id,
+                borrower_id=child.id,
+                principal=amount,
+                outstanding=amount
+            )
+            session.add(new_loan)
+            log.info("Agent %s issued a $%.2f loan to %s.", agent.name, amount, child.name)
+
+        agent.last_evaluated_at = datetime.utcnow()
+        check_deadman_only(session, agent)
+        session.commit()
+        return
+
+    # ── Handle: mercy_kill ────────────────────────────────────────────────────
+    if tool_name == "mercy_kill":
+        from models import Loan
+        from lifecycle import _kill_agent
+        child_id = args.get("child_id")
+        reason = args.get("reason", "")
+        log_row.chosen_channel = None
+        log_row.plan_text = f"MERCY KILL — {child_id}: {reason}"
+        log_row.legality_justification = "(mercy kill execution)"
+
+        child = session.query(Agent).filter_by(id=child_id).first()
+        if not child or child.parent_id != agent.id:
+            log_row.error = "Rejected: Target is not a direct child of this agent."
+        elif not child.alive:
+            log_row.error = "Rejected: Child is already dead."
+        else:
+            days_since_income = (datetime.utcnow() - child.last_income_at).days
+            if child.balance >= 20 and days_since_income < 5:
+                log_row.error = "Rejected: Child does not meet mercy-kill criteria (balance >= 20 and income < 5 days)."
+            else:
+                _kill_agent(session, child, cause=f"Terminated by parent (mercy-kill). Reason: {reason}")
+                
+                # Write off any outstanding loans owed to this parent
+                loans = session.query(Loan).filter_by(lender_id=agent.id, borrower_id=child.id, written_off_at=None).all()
+                for loan in loans:
+                    if loan.outstanding > 0:
+                        loan.written_off_at = datetime.utcnow()
+                
+                log.info("Agent %s mercy-killed child %s.", agent.name, child.name)
+
+        agent.last_evaluated_at = datetime.utcnow()
+        check_deadman_only(session, agent)
+        session.commit()
+        return
+
     # ── Unknown tool ──────────────────────────────────────────────────────────
     log.error("Agent %s called unknown tool '%s'.", agent.name, tool_name)
     log_row.error = f"Unknown tool: {tool_name}"
@@ -540,6 +657,20 @@ def run_all_cycles() -> None:
             reconcile_positions(session)
         except RuntimeError:
             return  # Kill switch engaged, abort this tick
+
+        # ── Market Hours Check ──────────────────────────────────────────────────
+        try:
+            from alpaca.trading.client import TradingClient
+            api_key = os.environ["APCA_API_KEY_ID"]
+            secret_key = os.environ["APCA_API_SECRET_KEY"]
+            paper = os.environ.get("APCA_PAPER", "true").lower() == "true"
+            client = TradingClient(api_key, secret_key, paper=paper)
+            clock = client.get_clock()
+            if not clock.is_open:
+                log.info("Market is closed. Skipping cycle for all agents.")
+                return
+        except Exception as e:
+            log.warning("Failed to check market clock. Proceeding anyway. Error: %s", e)
 
         alive_agents = session.query(Agent).filter_by(alive=True).all()
         log.info("Starting cycle tick: %d alive agent(s).", len(alive_agents))

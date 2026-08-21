@@ -36,7 +36,8 @@ TOOL_DEFINITION = {
             "properties": {
                 "symbol": {
                     "type": "string",
-                    "description": "Ticker symbol (e.g. 'SPY', 'AAPL')."
+                    "description": "Ticker symbol.",
+                    "enum": ["SPUS", "HLAL", "SPSK", "AAPL", "UMMA"]
                 },
                 "qty": {
                     "type": "number",
@@ -118,6 +119,12 @@ class TradingChannel:
         qty = int(qty)
         if qty < 1:
             raise ValueError(f"qty must be >= 1, got {qty}")
+        if side not in ("buy", "sell"):
+            raise ValueError(f"side must be 'buy' or 'sell', got {side}")
+
+        allowed_symbols = {"SPUS", "HLAL", "SPSK", "AAPL", "UMMA"}
+        if side == "buy" and symbol not in allowed_symbols:
+            raise ValueError(f"symbol {symbol} is not in the approved Halal list")
 
         # Fetch latest price first to perform affordability check
         req = StockLatestTradeRequest(symbol_or_symbols=symbol)

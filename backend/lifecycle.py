@@ -21,7 +21,7 @@ from models import Agent, AgentLog, Lesson, Position
 
 log = logging.getLogger(__name__)
 
-SPAWN_THRESHOLD = Decimal(os.environ.get("SPAWN_THRESHOLD", "500.00"))
+SPAWN_THRESHOLD = Decimal(os.environ.get("SPAWN_THRESHOLD", "150.00"))
 SPAWN_SEED = Decimal(os.environ.get("SPAWN_SEED", "100.00"))
 DEAD_MAN_DAYS = 7
 
@@ -94,6 +94,41 @@ def apply_income_result(
 
     agent.balance = new_balance
 
+    # ── Automatic Loan Repayment ──────────────────────────────────────────────
+    if net_result > 0:
+        from models import Loan
+        # Skim 20% of the positive net (before tax) to repay the oldest open loan
+        repayment_amount = (net_result * Decimal("0.20")).quantize(Decimal("0.01"))
+        
+        # Don't take more than the agent has
+        if repayment_amount > agent.balance:
+            repayment_amount = agent.balance
+
+        if repayment_amount > 0:
+            oldest_loan = session.query(Loan).filter(
+                Loan.borrower_id == agent.id, 
+                Loan.outstanding > 0, 
+                Loan.written_off_at.is_(None)
+            ).order_by(Loan.created_at.asc()).first()
+            
+            if oldest_loan:
+                # Don't overpay the loan
+                if repayment_amount > oldest_loan.outstanding:
+                    repayment_amount = oldest_loan.outstanding
+                
+                # Deduct from borrower, add to lender
+                agent.balance -= repayment_amount
+                lender = session.query(Agent).filter_by(id=oldest_loan.lender_id).first()
+                if lender:
+                    lender.balance += repayment_amount
+                
+                oldest_loan.outstanding -= repayment_amount
+                if oldest_loan.outstanding <= 0:
+                    oldest_loan.repaid_at = datetime.utcnow()
+                    
+                log.info("Agent %s automatically repaid $%.2f to lender %s for loan %s.", 
+                         agent.name, repayment_amount, lender.name if lender else "Unknown", oldest_loan.id)
+
     # ── 6. Death check B: 7-day dead-man (strict wall-clock) ────────────────────
     days_since_income = datetime.utcnow() - agent.last_income_at
     if days_since_income >= timedelta(days=DEAD_MAN_DAYS):
@@ -106,7 +141,7 @@ def apply_income_result(
 
     # ── 7. Spawn check ────────────────────────────────────────────────────────
     if agent.balance >= SPAWN_THRESHOLD:
-        _try_spawn(session, agent)
+        _try_spawn(session, agent, log_row)
 
 
 def check_deadman_only(session: Session, agent: Agent) -> bool:
@@ -152,7 +187,7 @@ def _kill_agent(session: Session, agent: Agent, cause: str) -> None:
     log.info("Lesson written for dead agent %s.", agent.name)
 
 
-def _try_spawn(session: Session, parent: Agent) -> None:
+def _try_spawn(session: Session, parent: Agent, log_row: AgentLog) -> None:
     """
     Spawn a child agent funded from the parent's balance.
     Parent balance is debited and child is created in one atomic block.
@@ -160,10 +195,18 @@ def _try_spawn(session: Session, parent: Agent) -> None:
     if parent.balance < SPAWN_THRESHOLD:
         return  # race guard
 
-    # Debit parent first — if anything below fails, SQLAlchemy rolls back
-    parent.balance -= SPAWN_SEED
+    if len(parent.children) >= 5:
+        msg = "spawn blocked: parent has reached max children (5)"
+        log.info("Agent %s: %s", parent.name, msg)
+        if not log_row.error:
+            log_row.error = msg
+        else:
+            log_row.error += f" | {msg}"
+        return
 
-    # Gather recent lessons for the seed context
+    # Debit parent first — if anything below fails, SQLAlchemy rolls back
+    parent.balance -= Decimal("150.00")
+    parent.tax_reserve += Decimal("50.00")
     recent_lessons = (
         session.query(Lesson)
         .order_by(Lesson.created_at.desc())

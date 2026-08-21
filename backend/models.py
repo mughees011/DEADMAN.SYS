@@ -106,3 +106,17 @@ class Position(Base):
     __table_args__ = (
         UniqueConstraint('agent_id', 'symbol', name='uq_agent_symbol'),
     )
+class Loan(Base):
+    __tablename__ = 'loans'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    lender_id = Column(UUID(as_uuid=True), ForeignKey('agents.id'), nullable=False)
+    borrower_id = Column(UUID(as_uuid=True), ForeignKey('agents.id'), nullable=False)
+    principal = Column(Numeric(12, 2), nullable=False)
+    outstanding = Column(Numeric(12, 2), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    repaid_at = Column(DateTime, nullable=True)
+    written_off_at = Column(DateTime, nullable=True)
+
+
+
