@@ -36,19 +36,28 @@ export default function AgentAnalytics() {
     return <div className="text-dim animate-pulse">LOADING_DATA...</div>;
   }
 
-  // Construct chart data from logs (reverse to get chronological)
-  const chartData = [...logs].reverse().map(l => ({
-    cycle: l.cycle_count || 0,
-    balance: l.agent_balance_after !== null ? l.agent_balance_after : agent.balance
-  }));
+  // Chart: use situation_snapshot.balance from each log (chronological order)
+  const chartData = [...logs].reverse().map((l, i) => ({
+    tick: i,
+    balance: l.situation_snapshot?.balance
+      ? parseFloat(l.situation_snapshot.balance)
+      : null,
+    ts: l.cycle_at,
+  })).filter(d => d.balance !== null);
 
-  // Initial balance is seed amount or balance before first log. 
-  // Let's just prepend a 0-point if we want.
+  // Prepend current balance as the latest point if logs exist
   if (chartData.length > 0) {
-    chartData.unshift({ cycle: chartData[0].cycle - 1, balance: chartData[0].balance - logs[logs.length-1].net_result });
+    chartData.push({ tick: chartData.length, balance: parseFloat(agent.balance), ts: null });
   } else {
-    chartData.push({ cycle: 0, balance: agent.balance });
+    chartData.push({ tick: 0, balance: parseFloat(agent.balance), ts: null });
   }
+
+  // Last heartbeat: most recent log timestamp
+  const lastHeartbeat = logs[0]?.cycle_at
+    ? format(new Date(logs[0].cycle_at), 'HH:mm:ss')
+    : null;
+
+  const lastLogIndex = logs.length;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -67,7 +76,7 @@ export default function AgentAnalytics() {
         <div className="flex gap-4">
           <div className="border border-panel-border bg-panel p-4 w-40">
             <div className="text-[10px] text-dim tracking-widest uppercase mb-1">CURRENT_BAL</div>
-            <div className="text-xl text-alive">${agent.balance.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+            <div className="text-xl text-alive">${parseFloat(agent.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
           </div>
           <div className="border border-gold bg-panel p-4 w-40">
             <div className="text-[10px] text-gold tracking-widest uppercase mb-1">DEAD_MAN_SWITCH</div>
@@ -82,34 +91,48 @@ export default function AgentAnalytics() {
       <div className="grid grid-cols-3 gap-6">
         <div className="col-span-2 border border-panel-border bg-panel p-4 relative h-64">
           <div className="flex justify-between text-[10px] tracking-widest text-dim uppercase mb-4">
-            <span>BALANCE_TRAJECTORY_T-7</span>
+            <span>BALANCE_TRAJECTORY_T-{Math.min(logs.length, 7)}</span>
+            <span className="text-muted">{chartData.length} data points</span>
           </div>
           
           <div className="absolute inset-x-4 top-12 bottom-4">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <YAxis domain={['auto', 'auto']} hide />
-                <ReferenceLine y={0} stroke="var(--color-dim)" strokeDasharray="3 3" />
-                <Line 
-                  type="stepAfter" 
-                  dataKey="balance" 
-                  stroke="var(--color-alive)" 
-                  strokeWidth={3} 
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {chartData.length < 2 ? (
+              <div className="flex items-center justify-center h-full text-dim text-xs tracking-widest">
+                NOT_ENOUGH_DATA — WAITING_FOR_CYCLES
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <YAxis domain={['auto', 'auto']} hide />
+                  <ReferenceLine y={0} stroke="var(--color-dim)" strokeDasharray="3 3" />
+                  <Line 
+                    type="stepAfter" 
+                    dataKey="balance" 
+                    stroke="var(--color-alive)" 
+                    strokeWidth={3} 
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
         <div className="col-span-1 space-y-6">
           <div className="border border-panel-border bg-panel p-4 h-full">
             <div className="text-[10px] text-dim tracking-widest uppercase mb-2">LAST_HEARTBEAT</div>
-            <div className="text-sm text-primary flex items-center">
-              <span className="text-alive mr-2">♡</span> 
-              TICK_{logs[0]?.cycle_count || '?'}
-            </div>
+            {lastHeartbeat ? (
+              <>
+                <div className="text-sm text-primary flex items-center">
+                  <span className="text-alive mr-2">♡</span> 
+                  TICK_{lastLogIndex}
+                </div>
+                <div className="text-xs text-dim mt-1 font-mono">{lastHeartbeat}</div>
+              </>
+            ) : (
+              <div className="text-xs text-dim tracking-widest">NO_CYCLES_YET</div>
+            )}
           </div>
         </div>
       </div>

@@ -181,9 +181,36 @@ class TradingChannel:
         except Exception:
             pass  # Best-effort; if cancel fails, let submit attempt surface the real error
 
-        self.trading_client.submit_order(order_request)
+        submitted = self.trading_client.submit_order(order_request)
+
+        import time
+        filled_order = None
+        # Poll up to 15 seconds for the market order to fill
+        for _ in range(15):
+            status_check = self.trading_client.get_order_by_id(submitted.id)
+            if status_check.status.name == 'FILLED':
+                filled_order = status_check
+                break
+            elif status_check.status.name in ('CANCELED', 'REJECTED', 'EXPIRED'):
+                raise ValueError(f"Order failed with status: {status_check.status.name}")
+            time.sleep(1)
+
+        if not filled_order:
+            # If a market order hasn't filled in 15s during open market hours, something is very wrong.
+            # Cancel it so we don't end up with a random fill later that ruins reconciliation.
+            try:
+                self.trading_client.cancel_order_by_id(submitted.id)
+            except Exception:
+                pass
+            raise ValueError(
+                "Order did not fill within 15 seconds. Cancelled to protect ledger integrity."
+            )
+
+        actual_fill_price = Decimal(str(filled_order.filled_avg_price))
+        actual_qty = Decimal(str(filled_order.filled_qty))
+        actual_gross = actual_fill_price * actual_qty
 
         if side == "buy":
-            return -gross   # capital deployed; realised P&L comes on the sell
+            return -actual_gross   # capital deployed; realised P&L comes on the sell
         else:
-            return +gross   # proceeds received
+            return +actual_gross   # proceeds received

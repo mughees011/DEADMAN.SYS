@@ -45,4 +45,9 @@ export const toggleKillSwitch = async (engaged) => {
   return data;
 };
 
+export const getMemory = async (limit = 100) => {
+  const { data } = await api.get(`/memory?limit=${limit}`);
+  return data;
+};
+
 export default api;
