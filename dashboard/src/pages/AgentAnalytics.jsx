@@ -59,8 +59,14 @@ export default function AgentAnalytics() {
 
   const lastLogIndex = logs.length;
 
+  // net_result is raw cash-flow: BUY = negative (cash out), SELL = positive (cash in).
+  // True P&L = sum of all net_results (buys and sells cancel, leaving only the gain/loss).
+  const netPnL = logs.reduce((sum, log) => sum + (parseFloat(log.net_result) || 0), 0);
+  const totalGrossIn  = logs.reduce((sum, log) => { const n = parseFloat(log.net_result)||0; return n > 0 ? sum + n : sum; }, 0);
+  const totalGrossOut = logs.reduce((sum, log) => { const n = parseFloat(log.net_result)||0; return n < 0 ? sum + Math.abs(n) : sum; }, 0);
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className="w-full space-y-6">
       {/* Header Info */}
       <div className="flex justify-between items-start">
         <div>
@@ -74,13 +80,19 @@ export default function AgentAnalytics() {
         </div>
         
         <div className="flex gap-4">
+          <div className={`border ${netPnL >= 0 ? 'border-alive' : 'border-danger'} bg-panel p-4 w-36`}>
+            <div className="text-[10px] text-dim tracking-widest uppercase mb-1">NET_P&L</div>
+            <div className={`text-lg font-bold ${netPnL >= 0 ? 'text-alive' : 'text-danger'}`}>
+              {netPnL >= 0 ? '+' : ''}{netPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+            </div>
+          </div>
           <div className="border border-panel-border bg-panel p-4 w-40">
             <div className="text-[10px] text-dim tracking-widest uppercase mb-1">CURRENT_BAL</div>
-            <div className="text-xl text-alive">${parseFloat(agent.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+            <div className="text-xl text-primary">${parseFloat(agent.balance).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
           </div>
           <div className="border border-gold bg-panel p-4 w-40">
             <div className="text-[10px] text-gold tracking-widest uppercase mb-1">DEAD_MAN_SWITCH</div>
-            <div className="text-xl text-primary">
+            <div className="text-xl text-gold">
               {agent.alive ? '7/7 DAYS' : '0/7 DAYS'}
             </div>
           </div>
@@ -146,9 +158,9 @@ export default function AgentAnalytics() {
         
         <div className="grid grid-cols-12 gap-4 p-4 border-b border-panel-border text-[10px] tracking-widest text-dim uppercase">
           <div className="col-span-2">TIMESTAMP</div>
-          <div className="col-span-3">SITUATION_SNAPSHOT</div>
-          <div className="col-span-3">ACTION_TAKEN</div>
-          <div className="col-span-3">LEGALITY_JUSTIFICATION</div>
+          <div className="col-span-4">SITUATION_SNAPSHOT</div>
+          <div className="col-span-1">ACTION</div>
+          <div className="col-span-4">LEGALITY_JUSTIFICATION</div>
           <div className="col-span-1 text-right">RESULT</div>
         </div>
 
@@ -164,16 +176,16 @@ export default function AgentAnalytics() {
               <div className="col-span-2 font-mono text-dim">
                 {format(new Date(log.cycle_at), 'yyyy-MM-dd HH:mm:ss')}
               </div>
-              <div className="col-span-3 text-muted pr-4 truncate" title={log.plan_text}>
+              <div className="col-span-4 text-muted whitespace-pre-wrap pr-4 leading-relaxed">
                 {log.error ? "SYSTEM_ERROR" : log.plan_text}
               </div>
               <div className={clsx(
-                "col-span-3 font-mono",
+                "col-span-1 font-mono break-words",
                 log.chosen_channel === 'WAIT' ? 'text-dim' : 'text-gold'
               )}>
                 {log.error ? "CRASH" : log.chosen_channel || 'WAIT'}
               </div>
-              <div className="col-span-3 text-muted pr-4 truncate" title={log.legality_justification}>
+              <div className="col-span-4 text-muted whitespace-pre-wrap pr-4 leading-relaxed">
                 {log.legality_justification || '--'}
               </div>
               <div className={clsx(

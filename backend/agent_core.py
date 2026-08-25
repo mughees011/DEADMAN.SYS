@@ -232,21 +232,25 @@ def _build_situation(agent: Agent, session: Session, market_snapshot_text: str, 
     )
     notes_text = "\n".join(f"  • {n.text}" for n in boss_notes) or "  (none)"
 
-    # Last cycle log (to prevent repeating mistakes)
-    last_log = (
+    # Recent trade history (to prevent repeating mistakes)
+    recent_trades = (
         session.query(AgentLog)
-        .filter_by(agent_id=agent.id)
+        .filter(AgentLog.agent_id == agent.id, AgentLog.chosen_channel == 'execute_trade')
         .order_by(AgentLog.cycle_at.desc())
-        .first()
+        .limit(5)
+        .all()
     )
-    last_cycle_text = "  (No previous cycles)"
-    if last_log:
-        if last_log.error:
-            last_cycle_text = f"  • FAILED: {last_log.error}"
-        elif last_log.chosen_channel:
-            last_cycle_text = f"  • SUCCESS: {last_log.plan_text} (Result: ${last_log.net_result})"
-        else:
-            last_cycle_text = f"  • WAITED: {last_log.plan_text}"
+    
+    trade_history_text = "  (No previous trades)"
+    if recent_trades:
+        lines = []
+        for t in reversed(recent_trades):
+            if t.error:
+                lines.append(f"  • FAILED: {t.error}")
+            else:
+                net = t.net_result or Decimal("0.00")
+                lines.append(f"  • {t.plan_text} (Result: ${net:.2f})")
+        trade_history_text = "\n".join(lines)
 
     return f"""\
 AGENT STATUS
@@ -263,8 +267,8 @@ OPEN POSITIONS (assets you currently hold and CAN sell):
 MARKET SNAPSHOT (current prices):
 {market_snapshot_text or "  (No market data available)"}
 
-LAST CYCLE RESULT:
-{last_cycle_text}
+YOUR RECENT TRADE HISTORY (learn from your results):
+{trade_history_text}
 
 RECENT COLLECTIVE LESSONS (from dead agents):
 {lessons_text}

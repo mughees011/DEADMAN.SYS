@@ -52,7 +52,7 @@ class AgentLogResponse(BaseModel):
 
 class LessonResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
+    id: UUID
     source_agent_id: Optional[UUID]
     text: str
     created_at: datetime

@@ -18,39 +18,39 @@ export default function Layout() {
   return (
     <div className="flex h-screen w-full bg-base text-primary overflow-hidden">
       {/* Sidebar */}
-      <div className="w-64 border-r border-panel-border flex flex-col bg-panel">
-        <div className="p-6">
-          <h1 className="text-xl font-bold tracking-wider mb-2">OPERATOR_01</h1>
-          <div className="flex items-center text-xs tracking-widest text-alive uppercase">
-            <span className="w-2 h-2 rounded-full bg-alive animate-pulse mr-2"></span>
+      <div className="w-48 border-r border-panel-border flex flex-col bg-panel">
+        <div className="p-4">
+          <h1 className="text-lg font-bold tracking-wider mb-2">OPERATOR_01</h1>
+          <div className="flex items-center text-[10px] tracking-widest text-alive uppercase">
+            <span className="w-1.5 h-1.5 rounded-full bg-alive animate-pulse mr-2"></span>
             Status: Active
           </div>
         </div>
 
-        <nav className="flex-1 mt-6 space-y-1">
+        <nav className="flex-1 mt-4 space-y-1">
           {navItems.map((item) => (
             <NavLink
               key={item.name}
               to={item.path}
               className={({ isActive }) =>
                 clsx(
-                  'flex items-center px-6 py-3 text-sm font-semibold tracking-widest transition-colors',
+                  'flex items-center px-4 py-2 text-xs font-semibold tracking-widest transition-colors',
                   isActive 
                     ? 'bg-alive text-base'
                     : 'text-muted hover:text-primary hover:bg-panel-border/30'
                 )
               }
             >
-              <item.icon className="w-4 h-4 mr-4" />
+              <item.icon className="w-3 h-3 mr-3" />
               {item.name}
             </NavLink>
           ))}
         </nav>
 
-        <div className="p-6 border-t border-panel-border space-y-4">
+        <div className="p-4 border-t border-panel-border space-y-4">
           <button 
             onClick={() => setKillModalOpen(true)}
-            className="w-full py-2 border border-danger text-danger hover:bg-danger/10 text-xs tracking-widest uppercase transition-colors flex items-center justify-center"
+            className="w-full py-1.5 border border-danger text-danger hover:bg-danger/10 text-[10px] tracking-widest uppercase transition-colors flex items-center justify-center"
           >
             TERMINATE_ALL
           </button>
@@ -59,9 +59,9 @@ export default function Layout() {
               document.cookie = "session=; Max-Age=0; path=/;";
               navigate('/login');
             }}
-            className="flex items-center text-muted hover:text-primary text-xs tracking-widest uppercase transition-colors"
+            className="flex items-center text-muted hover:text-primary text-[10px] tracking-widest uppercase transition-colors"
           >
-            <LogOut className="w-4 h-4 mr-3" />
+            <LogOut className="w-3 h-3 mr-2" />
             Logout
           </button>
         </div>
